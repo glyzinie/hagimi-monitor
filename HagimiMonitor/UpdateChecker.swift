@@ -4,12 +4,14 @@ import Foundation
 @Observable
 final class UpdateChecker {
     typealias DataLoader = (URLRequest) async throws -> (Data, URLResponse)
+    typealias LocalizedStringProvider = (String) -> String
 
     private(set) var state: UpdateCheckState = .idle
 
     private let latestReleaseURL: URL
     private let currentVersionProvider: () -> String
     private let dataLoader: DataLoader
+    private let localizedString: LocalizedStringProvider
 
     init(
         latestReleaseURL: URL = URL(string: "https://api.github.com/repos/Acerola-1/hagimi-monitor/releases/latest")!,
@@ -18,11 +20,15 @@ final class UpdateChecker {
         },
         dataLoader: @escaping DataLoader = { request in
             try await URLSession.shared.data(for: request)
+        },
+        localizedString: @escaping LocalizedStringProvider = { key in
+            String(localized: String.LocalizationValue(key))
         }
     ) {
         self.latestReleaseURL = latestReleaseURL
         self.currentVersionProvider = currentVersionProvider
         self.dataLoader = dataLoader
+        self.localizedString = localizedString
     }
 
     var currentVersion: String {
@@ -50,13 +56,13 @@ final class UpdateChecker {
             do {
                 release = try JSONDecoder().decode(GitHubRelease.self, from: data)
             } catch {
-                state = .failed(String(localized: "update.parse-failed"))
+                state = .failed(localizedString("update.parse-failed"))
                 return
             }
             let latestVersion = VersionParser.normalize(release.tagName)
 
             guard !latestVersion.isEmpty else {
-                state = .failed(String(localized: "update.version-parse-failed"))
+                state = .failed(localizedString("update.version-parse-failed"))
                 return
             }
 
@@ -72,7 +78,7 @@ final class UpdateChecker {
                 state = .upToDate
             }
         } catch {
-            state = .failed(String(localized: "update.network-error"))
+            state = .failed(localizedString("update.network-error"))
         }
     }
 
@@ -98,23 +104,23 @@ final class UpdateChecker {
 
     private func failureMessage(for response: URLResponse, data: Data) -> String {
         guard let httpResponse = response as? HTTPURLResponse else {
-            return String(localized: "update.temp-unavailable")
+            return localizedString("update.temp-unavailable")
         }
 
         switch httpResponse.statusCode {
         case 403, 429:
-            return String(localized: "update.rate-limited")
+            return localizedString("update.rate-limited")
         case 404:
-            return String(localized: "update.no-release")
+            return localizedString("update.no-release")
         case 500...599:
-            return String(localized: "update.github-unavailable")
+            return localizedString("update.github-unavailable")
         default:
             if let githubError = try? JSONDecoder().decode(GitHubErrorResponse.self, from: data),
                let message = githubError.message,
                !message.isEmpty {
-                return String(localized: "update.check-failed") + "\(message)"
+                return localizedString("update.check-failed") + "\(message)"
             }
-            return String(localized: "update.temp-unavailable")
+            return localizedString("update.temp-unavailable")
         }
     }
 }

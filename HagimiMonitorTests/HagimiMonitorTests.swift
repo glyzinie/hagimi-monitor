@@ -91,6 +91,12 @@ struct HagimiMonitorTests {
         #expect(networkAddressSummary([]) == "--")
     }
 
+    @Test func networkByteRateHandlesCounterChanges() {
+        #expect(networkBytesPerSecond(current: 1_500, previous: 500, elapsed: 2) == 500)
+        #expect(networkBytesPerSecond(current: 100, previous: 500, elapsed: 2) == 0)
+        #expect(networkBytesPerSecond(current: 100, previous: 0, elapsed: 0) == 1_000)
+    }
+
     @Test func monitorColorSchemeDefaultsToBalanced() {
         let defaults = UserDefaults(suiteName: "HagimiMonitorTests.colorScheme.default")!
         defaults.removePersistentDomain(forName: "HagimiMonitorTests.colorScheme.default")
