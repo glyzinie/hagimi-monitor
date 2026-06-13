@@ -1,0 +1,100 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_prerelease:
+        description: 'Create a temporary prerelease'
+        required: true
+        type: boolean
+        default: true
+  push:
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      BUILD_CONFIGURATION: ${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main') && 'Release' || 'Debug' }}
+      PROJECT_PATH: hagimi-monitor.xcodeproj
+      SCHEME: HagimiMonitorDirect
+      DERIVED_DATA_PATH: build/DerivedData
+      ARTIFACT_DIR: build/artifacts
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          set-safe-directory: false
+          show-progress: false
+
+      - name: Build
+        run: |
+          xcodebuild -quiet \
+            -project "$PROJECT_PATH" \
+            -scheme "$SCHEME" \
+            -configuration "$BUILD_CONFIGURATION" \
+            -derivedDataPath "$DERIVED_DATA_PATH" \
+            -destination 'platform=macOS,arch=arm64' \
+            build \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf
+
+      - name: Package DMG
+        run: |
+          app_path="$DERIVED_DATA_PATH/Build/Products/$BUILD_CONFIGURATION/HagimiMonitor.app"
+          dmg_root="build/dmg-root"
+          dmg_path="$ARTIFACT_DIR/HagimiMonitor-$BUILD_CONFIGURATION.dmg"
+
+          mkdir -p "$ARTIFACT_DIR" "$dmg_root"
+          cp -R "$app_path" "$dmg_root/"
+          ln -s /Applications "$dmg_root/Applications"
+          hdiutil create -volname HagimiMonitor \
+            -srcfolder "$dmg_root" \
+            -ov -format UDZO \
+            "$dmg_path"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: HagimiMonitor-${{ env.BUILD_CONFIGURATION }}
+          path: ${{ env.ARTIFACT_DIR }}/HagimiMonitor-${{ env.BUILD_CONFIGURATION }}.dmg
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Prepare prerelease metadata
+        if: github.event_name == 'workflow_dispatch' && inputs.create_prerelease
+        id: prerelease
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          tag="preview-${GITHUB_RUN_NUMBER}-${short_sha}"
+          {
+            echo "tag=$tag"
+            echo "name=Preview build $tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create temporary prerelease
+        if: github.event_name == 'workflow_dispatch' && inputs.create_prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.prerelease.outputs.tag }}
+          name: ${{ steps.prerelease.outputs.name }}
+          files: ${{ env.ARTIFACT_DIR }}/HagimiMonitor-${{ env.BUILD_CONFIGURATION }}.dmg
+          body: |
+            Temporary prerelease generated from `${{ github.ref_name }}` at `${{ github.sha }}`.
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
