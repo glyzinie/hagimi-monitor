@@ -7,7 +7,11 @@ final class NetworkSampler: MonitorSampler {
 
     private var previousNetworkBytes: (input: UInt64, output: UInt64, timestamp: Date)?
     private var publicIPCache: (ip: String, timestamp: Date)?
+    private var isPublicIPFetchInFlight = false
+    private var lastPublicIPFetchAttempt: Date?
     private let publicIPRefreshInterval: TimeInterval = 30
+    private let publicIPStateQueue = DispatchQueue(label: "hagimi.network.public-ip")
+    private let publicIPURL = URL(string: "https://api.ipify.org")!
 
     func sample(previous: MonitorModule?) -> MonitorModule {
         let now = Date()
@@ -33,8 +37,8 @@ final class NetworkSampler: MonitorSampler {
         }
 
         let delta = max(0.1, now.timeIntervalSince(previousBytes.timestamp))
-        let upload = Double(bytes.output &- previousBytes.output) / delta
-        let download = Double(bytes.input &- previousBytes.input) / delta
+        let upload = networkBytesPerSecond(current: bytes.output, previous: previousBytes.output, elapsed: delta)
+        let download = networkBytesPerSecond(current: bytes.input, previous: previousBytes.input, elapsed: delta)
         let value = min(100, log10(max(1, upload + download)) * 14)
 
         return MonitorModule(
@@ -121,25 +125,57 @@ final class NetworkSampler: MonitorSampler {
 
     private func fetchPublicIP() -> String {
         let now = Date()
-        if let cache = publicIPCache, now.timeIntervalSince(cache.timestamp) < publicIPRefreshInterval {
+        let cache = publicIPStateQueue.sync { publicIPCache }
+        if let cache, now.timeIntervalSince(cache.timestamp) < publicIPRefreshInterval {
             return cache.ip
         }
 
-        let semaphore = DispatchSemaphore(value: 0)
-        var result = "--"
+        startPublicIPRefreshIfNeeded(now: now)
+        return cache?.ip ?? "--"
+    }
 
-        let url = URL(string: "https://api.ipify.org")!
-        let task = URLSession.shared.dataTask(with: url) { data, _, _ in
-            if let data = data, let ip = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !ip.isEmpty {
-                result = ip
+    private func startPublicIPRefreshIfNeeded(now: Date) {
+        let shouldStart = publicIPStateQueue.sync {
+            guard !isPublicIPFetchInFlight else {
+                return false
             }
-            semaphore.signal()
+            if let lastPublicIPFetchAttempt,
+               now.timeIntervalSince(lastPublicIPFetchAttempt) < publicIPRefreshInterval {
+                return false
+            }
+
+            isPublicIPFetchInFlight = true
+            lastPublicIPFetchAttempt = now
+            return true
+        }
+
+        guard shouldStart else {
+            return
+        }
+
+        var request = URLRequest(url: publicIPURL)
+        request.timeoutInterval = 3
+        let task = URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
+            let ip = data
+                .flatMap { String(data: $0, encoding: .utf8) }?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let errorDescription = error?.localizedDescription
+
+            self?.publicIPStateQueue.async {
+                guard let self else { return }
+                if let ip, !ip.isEmpty {
+                    self.publicIPCache = (ip, Date())
+                } else if self.publicIPCache == nil {
+                    self.publicIPCache = ("--", Date())
+                }
+                self.isPublicIPFetchInFlight = false
+
+                if let errorDescription {
+                    AppLogger.sampler.error("Public IP refresh failed: \(errorDescription, privacy: .public)")
+                }
+            }
         }
         task.resume()
-        semaphore.wait()
-
-        publicIPCache = (result, now)
-        return result
     }
 
     private func networkInterfaceTitle(_ name: String?) -> String {
@@ -216,4 +252,12 @@ func networkAddressSummary(_ addresses: [String]) -> String {
     }
 
     return addresses.joined(separator: ", ")
+}
+
+func networkByteDelta(current: UInt64, previous: UInt64) -> UInt64 {
+    current >= previous ? current - previous : 0
+}
+
+func networkBytesPerSecond(current: UInt64, previous: UInt64, elapsed: TimeInterval) -> Double {
+    Double(networkByteDelta(current: current, previous: previous)) / max(0.1, elapsed)
 }

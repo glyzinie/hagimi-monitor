@@ -101,6 +101,13 @@ struct GitHubReleaseDecodingTests {
 
 @MainActor
 struct UpdateCheckerTests {
+    nonisolated private static func localizedString(for key: String) -> String {
+        [
+            "update.parse-failed": "无法解析更新信息",
+            "update.rate-limited": "检查更新过于频繁，请稍后再试",
+            "update.no-release": "暂时没有可用的发布版本"
+        ][key] ?? key
+    }
 
     @Test func checkForUpdatesReportsAvailableRelease() async throws {
         let releaseURL = URL(string: "https://github.com/Acerola-1/hagimi-monitor/releases/tag/v1.1.0")!
@@ -131,7 +138,8 @@ struct UpdateCheckerTests {
                         headerFields: nil
                     )!
                 )
-            }
+            },
+            localizedString: Self.localizedString(for:)
         )
 
         await checker.checkForUpdates()
@@ -163,7 +171,8 @@ struct UpdateCheckerTests {
                         headerFields: nil
                     )!
                 )
-            }
+            },
+            localizedString: Self.localizedString(for:)
         )
 
         await checker.checkForUpdates()
@@ -183,7 +192,8 @@ struct UpdateCheckerTests {
                         headerFields: nil
                     )!
                 )
-            }
+            },
+            localizedString: Self.localizedString(for:)
         )
 
         await checker.checkForUpdates()
@@ -203,7 +213,8 @@ struct UpdateCheckerTests {
                         headerFields: nil
                     )!
                 )
-            }
+            },
+            localizedString: Self.localizedString(for:)
         )
 
         await checker.checkForUpdates()
@@ -223,7 +234,8 @@ struct UpdateCheckerTests {
                         headerFields: nil
                     )!
                 )
-            }
+            },
+            localizedString: Self.localizedString(for:)
         )
 
         await checker.checkForUpdates()
